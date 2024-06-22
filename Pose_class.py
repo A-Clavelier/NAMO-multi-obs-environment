@@ -93,31 +93,47 @@ class Pose:
         """
         if self.graph is None:
             return None
-        parents = self.graph.get_parents(self)
-        if not parents:
-            # if the parents list is empty []
+        ancestors = self.graph.get_ancestors(self)
+        if not ancestors:
+            # if the ancestors list is empty []
             return None
-        parent_pose = parents[0]
+        parent_pose = ancestors[0]
         return parent_pose
     
-    def relative_to(self,ref_pose):
+    def _relative_to(self,ref_pose):
         """
-        Transforms a pose to its parent's reference frame.
-        That is to say give the pose relative to it's parent's parent.
+        Transforms a pose to the reference frame constituted by the parent .
+        That is to say give the pose relative to it's parent.
 
         OUTPUT:
-            - (pose): the transformed pose in the parent reference frame
-            - If the pose has no parent, it returns itself.
+            - (pose): the transformed pose relative to
         """
         if ref_pose is None:
-            return self, ref_pose
+            return self.relative_to_base()
+        ancestors = self.graph.get_ancestors(self)
+        # if the ref_pose relative to which we want to express this pose is an ancestor
+        # we simply need to  express the pose in the parent's frames enought times,
+        # iteratively climbing the hierarchy of parents.
+        if ref_pose in ancestors:
+            
+            position = self.position
+            orientation = self.orientation
+            parent = self.get_parent()
+            while parent is not ref_pose:
+                relative_position = current_parent.position + rotate_vec(self.position, parent_pose.orientation)
+                relative_orientation = mod(self.orientation + parent_pose.orientation)
+                current_parent = current_parent.get_parent()
+            return  current_position, current_orientation
+
+
+
         
-        position_InParentFrame, orientation_InParentFrame = change_frame_pose(self.position,self.orientation,
-                                                                              ref_pose.position,ref_pose.orientation)
         #create a temporary pose not linked in the graph just used for coordinates transform calculations
-        dummy_pose = Pose(position_InParentFrame, orientation_InParentFrame)
-        parent_frame = ref_pose.get_parent()
+        dummy_pose = Pose(relative_position, relative_orientation)
+        parent_frame = parent_pose.get_parent()
         return dummy_pose, parent_frame
+    
+    def _relative_to_child(self,child_pose):
     
     def relative_to_base(self):
         """

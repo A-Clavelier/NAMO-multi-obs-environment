@@ -4,21 +4,21 @@ import networkx as nx
 from utils import split_text
 
 class Graph:
+    #add a node class to the graph instead of the dictionary structure? Is it better?
     def __init__(self):
-        self.parents = {}  # Maps each node to a list of its parent nodes
-        self.children = {}  # Maps each node to a list of its child nodes
+        self.graph = {}
         self.visualization_active = False
         self.img = None
+    
 
     def add_node(self, node):
         if self.has_node(node):
             print(f"Node {node} already exists.")
         else:
-            self.parents[node] = []
-            self.children[node] = []
+            self.graph[node] = []
             if self.visualization_active: 
-                self._update_graph_img()
-                if cv2.waitKey(1) & 0xFF == 27: self.stop_display()
+                    self._update_graph_img()
+                    if cv2.waitKey(1) & 0xFF == 27: self.stop_display()
     
     def add_edge(self, node1, node2):
         if not self.has_node(node1):
@@ -28,104 +28,64 @@ class Graph:
         elif self.has_edge(node1, node2):
             print(f"Edge from {node1} to {node2} already exists.")
         else:
-            self.parents[node2].append(node1)
-            self.children[node1].append(node2)
+            self.graph[node1].append(node2)
             if self.visualization_active: 
-                self._update_graph_img()
-                if cv2.waitKey(1) & 0xFF == 27: self.stop_display()
+                    self._update_graph_img()
+                    if cv2.waitKey(1) & 0xFF == 27: self.stop_display()
 
     def remove_node(self, node):
         if not self.has_node(node):
             print(f"Node {node} does not exist.")
         else:
-            for parent in self.parents[node]:
-                self.children[parent].remove(node)
-            for child in self.children[node]:
-                self.parents[child].remove(node)
-            self.parents.pop(node)
-            self.children.pop(node)
-            if self.visualization_active: 
-                self._update_graph_img()
-                if cv2.waitKey(1) & 0xFF == 27: self.stop_display()
+            self.graph.pop(node)
+            for children in self.graph.values():
+                if node in children:
+                    children.remove(node)
+                    if self.visualization_active: 
+                        self._update_graph_img()
+                        if cv2.waitKey(1) & 0xFF == 27: self.stop_display()
 
     def remove_edge(self, node1, node2):
         if not self.has_edge(node1, node2):
             print(f"Edge from {node1} to {node2} does not exist.")
         else:
-            self.parents[node2].remove(node1)
-            self.children[node1].remove(node2)
+            self.graph[node1].remove(node2)
             if self.visualization_active: 
-                self._update_graph_img()
-                if cv2.waitKey(1) & 0xFF == 27: self.stop_display()
+                    self._update_graph_img()
+                    if cv2.waitKey(1) & 0xFF == 27: self.stop_display()
         
     def has_node(self, node):
-        return node in self.parents and node in self.children
+        return node in self.graph
     
     def has_edge(self, node1, node2):
-        return self.has_node(node1) and self.has_node(node2) and node1 in self.children[node2]
+        return self.has_node(node1) and node2 in self.graph[node1]
     
-    def get_parents(self, node):
-        if self.has_node(node):
-            return self.parents[node]
-        else:
-            print(f"Node {node} does not exist.")
-            return []
-
-    def get_children(self, node):
-        if self.has_node(node):
-            return self.children[node]
-        else:
-            print(f"Node {node} does not exist.")
-            return []
-
     def get_ancestors(self, node):
-        if not self.has_node(node):
-            print(f"Node {node} does not exist.")
-            return []
-        ancestors = set()
-        self._find_ancestors(node, ancestors)
-        return list(ancestors)
-
-    def _find_ancestors(self, node, ancestors):
-        for parent in self.get_parents(node):
-            if parent not in ancestors:
-                ancestors.add(parent)
-                self._find_ancestors(parent, ancestors)
-
-    def get_descendants(self, node):
-        if not self.has_node(node):
-            print(f"Node {node} does not exist.")
-            return []
-        descendants = set()
-        self._find_descendants(node, descendants)
-        return list(descendants)
-
-    def _find_descendants(self, node, descendants):
-        for child in self.get_children(node):
-            if child not in descendants:
-                descendants.add(child)
-                self._find_descendants(child, descendants)
+        ancestors = [parent for parent, children in self.graph.items() if node in children]
+        return ancestors
 
     def bfs_shortest_path(self, start, end):
-        if start not in self.parents:
+        if start not in self.graph:
             print(f"start node {start} does not exist.")
             return []
-        if end not in self.parents:
+        if end not in self.graph:
             print(f"end node {end} does not exist.")
             return []
         queue = [[start]]
         visited_nodes = set()
         if self.visualization_active: cycle_paths = []
         while queue:
+            # get the first path to test in the queue
             path = queue.pop(0)
-            current_node = path[-1]
+            current_node = path[len(path)-1]
+            # Check if Final state reached
             if current_node == end:
                 if self.visualization_active: 
                     self._update_graph_img(start, end, queue, cycle_paths, best_path=path)
                     if cv2.waitKey(0) & 0xFF == 27: self.stop_display()
                 return path
             visited_nodes.add(current_node)
-            for neighbor in self.get_children(current_node):
+            for neighbor in self.graph[current_node]:
                 if neighbor not in visited_nodes:
                     queue.append(path + [neighbor])
                 elif self.visualization_active: cycle_paths.append(path + [neighbor])
@@ -140,10 +100,7 @@ class Graph:
 
     def _update_graph_img(self, start=None, end=None, queue=[], cycle_paths=[], best_path=[]):
         # Create a networkx graph from the current graph
-        G = nx.DiGraph()
-        for node, parents in self.parents.items():
-            for parent in parents:
-                G.add_edge(parent, node)
+        G = nx.DiGraph(self.graph)
         if len(G.nodes) == 0:
             # If the graph is empty, create a blank image
             self.img = np.zeros((800, 1000, 3), dtype=np.uint8)
@@ -173,18 +130,7 @@ class Graph:
                 layer_dict[layer].append(node)
             nlist = [list(layer) for layer in layer_dict.values()]
             positions = nx.shell_layout(G, nlist=nlist)
-
-            # Adjust positions to increase spacing for inner circles
-            center = np.array([0.5, 0.5])
-            for i, layer in enumerate(nlist):
-                for node in layer:
-                    pos = np.array(positions[node])
-                    direction = pos - center
-                    distance = np.linalg.norm(direction)
-                    scaling_factor = 1 + (i / len(nlist)) * 2  # Increase spacing for inner circles
-                    new_distance = distance * scaling_factor
-                    positions[node] = center + direction / distance * new_distance
-
+        
         # Increase padding to ensure nodes do not go out of the screen
         img_width = 1000
         img_height = 800
@@ -222,7 +168,7 @@ class Graph:
                 y_offset += 20
         
         # Draw directed edges
-        for node1, edges in self.children.items():
+        for node1, edges in self.graph.items():
             for node2 in edges:
                 pt1 = positions[node1]
                 pt2 = positions[node2]
@@ -233,7 +179,7 @@ class Graph:
                 adjusted_pt2 = (int(pt2[0] - ellipse_axes_dict[node2][0] * norm_direction[0]), int(pt2[1] - ellipse_axes_dict[node2][1] * norm_direction[1]))
                 cv2.arrowedLine(self.img, adjusted_pt1, adjusted_pt2, (0, 0, 255), 2, tipLength=0.05)
         
-        # Function to highlight nodes during path search
+        #function to highlicht nodes during path search
         def draw_step(step, color):
             node1, node2 = step
             pt1 = positions[node1]
@@ -245,27 +191,23 @@ class Graph:
             cv2.arrowedLine(self.img, adjusted_pt1, adjusted_pt2, color, 2, tipLength=0.05)
             cv2.ellipse(self.img, tuple(pt1), ellipse_axes_dict[node1], 0, 0, 360, color, 2)
             cv2.ellipse(self.img, tuple(pt2), ellipse_axes_dict[node2], 0, 0, 360, color, 2)
-        
-        # If path search is running, it gives in argument nodes to be highlighted.
+        # if path search is running it gives in argument nodes to be highlighted.
         for path in queue:
-            # Draw neighbor nodes in yellow
+            # draw neighbor nodes in yellow
             step = path[-2:]
             draw_step(step, (0, 255, 255))
-        for path in queue + cycle_paths:
-            # Draw visited nodes in blue
+        for path in queue+cycle_paths:
+            # draw visited nodes in blue
             for step_to_visited_node in zip(path[:-2], path[1:-1]):
                 draw_step(step_to_visited_node, (255, 0, 0))
-        
-        # Start and end in cyan and magenta
+        # start and end in cyan and magenta
         if start is not None:
             cv2.ellipse(self.img, tuple(positions[start]), ellipse_axes_dict[start], 0, 0, 360, (255, 255, 0), 2)
         if end is not None:
-            cv2.ellipse(self.img, tuple(positions[end]), ellipse_axes_dict[end], 0, 0, 360, (255, 0, 255), 2)
-        
-        # Draw best path in green
+            cv2.ellipse(self.img, tuple( positions[end]), ellipse_axes_dict[end], 0, 0, 360, (255, 0, 255), 2)
+        # draw best path in green
         for step in zip(best_path[:-1], best_path[1:]):
             draw_step(step, (0, 255, 0))
-        
         self.display_graph()
 
     def display_graph(self):
