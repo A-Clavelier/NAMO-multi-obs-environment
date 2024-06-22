@@ -1,0 +1,16 @@
+shape: [0.75, 0.75]
+image: [[1,1,1],
+        [1,2,0],
+        [1,1,1]] 
+pick_LocalPoses_list: [[0,0,0]]
+max_v: 1    #m/s
+max_w: 90   #°/s
+max_av: 1   #m/s²
+max_aw: 90  #°/s²
+# LIDAR parameters
+ray_length: 3   #m
+num_rays: 200
+#observation parameters
+observation_distance: 6   #m
+
+
