@@ -23,28 +23,35 @@ def rotate_vec(vec, tetha):
     # Apply the rotation matrix
     rotated_x = x * np.cos(tetha_rad) - y * np.sin(tetha_rad)
     rotated_y = x * np.sin(tetha_rad) + y * np.cos(tetha_rad)
-    return [rotated_x,rotated_y]
+    return np.array([rotated_x,rotated_y],dtype=np.float32)
 
-def change_frame_pose(position, orientation, origin_position, origin_orientation):
+def pose_to_parent_frame(position, orientation, parent_position, parent_orientation):
     """
      Change the frame of reference for a 2D pose.
 
     INPUT:
-        - position (list/array): [x, y] coordinates of the position in the original frame
+        - position (array): [x, y] coordinates of the position in the original frame
         - orientation (float): angle of orientation in the original frame in degrees
-        - origin_position (list/array): [x, y] coordinates of the original frame's origin in the new frame
+        - origin_position (array): [x, y] coordinates of the original frame's origin in the new frame
         - origin_orientation (float): angle of orientation of the original frame in the new frame in degrees
 
     OUTPUT:
-        - (list, float): ([new_x, new_y], new_theta) coordinates of the position and orientation in the new frame
+        - (array, float): ([new_x, new_y], new_orientation) coordinates of the position and orientation in the new frame
     """
     # Adjust the angle by adding the rotation of the origin_pose
-    new_theta = mod(orientation + origin_orientation)
-    # rotate the pose coordinates by the angle of the origin_pose to align with the new frame
-    rotated_vec = rotate_vec(position, origin_orientation)
-    # Translate the rotated vector by the origin_pose to account for the new frame's origin
-    translated_vec = [rotated_vec[0] + origin_position[0], rotated_vec[1] + origin_position[1]]
-    return [translated_vec,new_theta]
+    new_orientation = mod(orientation + parent_orientation)
+    # rotate the pose coordinates by the angle of the origin_pose to align with the new frame.
+    # and translate of the origin_position to account for new frame's origin.
+    new_position = parent_position + rotate_vec(position, parent_orientation)
+    return [new_position,new_orientation]
+
+def pose_to_brother_frame(position, orientation, brother_position, brother_orientation):
+    """
+     inverse of the pose_to_parent_frame function
+    """
+    new_orientation = mod(orientation - brother_orientation)
+    new_position = rotate_vec(brother_position - position, 180-brother_orientation)
+    return [new_position,new_orientation]
 
 def draw_line(img, origin, end, color=(255, 0, 0), thickness=1):
     """
@@ -59,9 +66,7 @@ def draw_line(img, origin, end, color=(255, 0, 0), thickness=1):
     """
     orig_x, orig_y = origin
     end_x, end_y = end
-    # img_height-y because OpenCV's y-coordinates go down
-    img_height = img.shape[0]
-    cv2.line(img, (int(orig_x), int(img_height-orig_y)), (int(end_x), int(img_height-end_y)), color, thickness)
+    cv2.line(img, (int(orig_x), int(orig_y)), (int(end_x), int(end_y)), color, thickness)
 
 def draw_vec(img, vec, origin, color=(0, 0, 255), thickness=1):
     """Draws an arrow representing the vector at the given origin point on the given image.
@@ -76,10 +81,25 @@ def draw_vec(img, vec, origin, color=(0, 0, 255), thickness=1):
     x, y = vec
     orig_x, orig_y = origin
     end_x = orig_x + x
-    end_y = orig_y + y
-    # img_height-y because OpenCV's y-coordinates go down
-    img_height = img.shape[0]
-    cv2.arrowedLine(img, (int(orig_x), int(img_height-orig_y)), (int(end_x), int(img_height-end_y)), color, thickness)
+    end_y = orig_y - y
+    cv2.arrowedLine(img, (int(orig_x), int(orig_y)), (int(end_x), int(end_y)), color, thickness, tipLength=0.2)
+
+def draw_text(img, text, origin, color=(0, 0, 255), thickness=1, font_scale=1):
+    """Draws text at the given origin point on the given image.
+
+        INPUTS:
+            img (array): The image to draw on.
+            text (string)
+            origin (list/array): [x,y] the position of the text on the image.
+            color (tuple): (B,G,R) The color of the line.
+            thickness (int): The thickness of the line.
+            font_scale (float): size of the text
+    """
+    orig_x, orig_y = origin
+    text_size, baseline = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, thickness)
+    x = int(orig_x-text_size[0]/2)
+    y = int(orig_y+text_size[1])
+    cv2.putText(img, text, (x,y), cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, thickness)
 
 def crop_region(global_map, center_ImgPos, ImgShape, padding_value=0):
     """
@@ -204,5 +224,4 @@ def split_text(text, max_length):
 
 
 if __name__ == "__main__":
-    print(split_text("Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.",
-                     30))
+    print(rotate_vec([1,0],90))

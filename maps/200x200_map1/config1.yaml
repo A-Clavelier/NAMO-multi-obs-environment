@@ -1,7 +1,7 @@
 real_resolution: 40         #unit:[pxl/m]
 dijkstra_resolution: 5      #unit:[pxl/cell]
-origin_pxl: [100,100]       #unit:[pxl/pxl] (row,col)
 #unit:[m] for everything below
-goal_init_pos: [1.5,0]
-ROB_init_dict: {'name': 'ROB', 'pose': [-1.5, 0, 0.0]}
-MO_init_dicts_list: [{'name': 'MO1' , 'pose': [0, 0, 0.0]}]
+origin_pose: [2.5,2.5,0]       
+goal_pose: [1.5,0,0]
+ROB_init_dict: {'type': 'ROB', 'pose': [-1.5, 0, 0]}
+MO_init_dicts_list: [{'type': 'MOa' , 'pose': [0, 0, 0]}]
