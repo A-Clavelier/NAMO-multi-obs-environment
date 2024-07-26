@@ -147,6 +147,34 @@ class NAMOENV2D:
             print(f"goal: {self.goal.get_local_pose()}, goal_image {self.goal.get_image_pose(self.REAL_RESOLUTION,self.FO_map.shape[0])}")
             print(f"start: {self.start.get_local_pose()}, start_image {self.start.get_image_pose(self.REAL_RESOLUTION,self.FO_map.shape[0])}")
 
+
+    def _check_collision(self):
+        """
+        OUTPUT:
+            - collision (bool): True when there is a collision
+        """
+        # build a map with 1 on fixed obstacles (FO) and every object (MO/ROB)
+        self.collision_map = self.FO_map.copy()
+        for object in self.MO_list+[self.ROB]:
+            self.collision_map+=object.get_mask()
+        # if objects overlap with each other or fixed obstacles, 1+1=2. 
+        # if there is more pixels with 2 than 1/20 of the robot surface in pixels, we consider there is a collision.
+        if self.pickedMO is None:
+            intersection_surface = (self.collision_map > 1).sum()
+            if intersection_surface > 0:
+                return True
+            else:
+                return False
+        else:
+            # if there is a picked MO, separate the collision check with the ROB and with the pickedMO to avoid them colliding.
+            intersection_surface_1 = (self.collision_map-self.pickedMO.get_mask() > 1).sum()
+            intersection_surface_2 = (self.collision_map-self.ROB.get_mask() > 1).sum()
+            if intersection_surface_1 > 0 or intersection_surface_2 > 0:
+                return True
+            else:
+                return False
+
+
     def add_obstacle(self, type=None, pose=None):
         t=time.time()
         if type is None:
@@ -167,6 +195,7 @@ class NAMOENV2D:
                     break
         self.ping=time.time()-t
     
+
     def step(self, linear_displacement, angular_displacement, interaction=False):
         """ the environment takes a timestep 
             the robot executes the inputed actions.
@@ -188,10 +217,8 @@ class NAMOENV2D:
                 for MO in self.MO_list:
                     for MOpick in MO.pick_poses:
                         for ROBpick in self.ROB.pick_poses:
-                            if compare_poses(ROBpick,MOpick,0.1,15):
+                            if compare_poses(ROBpick,MOpick,0.2,8):
                                 MO.pose.to_brother_frame(self.ROB.pose)
-                                # MO.pose.position = ROBpick.position - MOpick.position
-                                # MO.pose.orientation = mod(ROBpick.orientation - MOpick.orientation)
                                 self.pickedMO = MO
                                 done=True
                                 break
@@ -205,22 +232,6 @@ class NAMOENV2D:
         self.ping=time.time()-t
 
 
-    def _check_collision(self):
-        """
-        OUTPUT:
-            - collision (bool): True when there is a collision
-        """
-        # build a map with 1 on fixed obstacles (FO) and every object (MO/ROB)
-        self.collision_map = self.FO_map.copy()
-        for object in self.MO_list+[self.ROB]:
-            self.collision_map+=object.get_mask()
-        # if objects overlap with each other or fixed obstacles, 1+1=2. 
-        # if there is more pixels with 2 than 1/20 of the robot surface in pixels, we consider there is a collision.
-        if (self.collision_map > 1).sum() > np.prod(self.ROB.imageshape)/50:
-            return True
-        else:
-            return False
-    
     def render(self, render_pose=True):
         t = time.time()
         image = np.where(self.collision_map == 1, 0, 255).astype(np.uint8)
@@ -237,12 +248,13 @@ class NAMOENV2D:
         cv2.waitKey(1)
         self.render_ping = time.time()-t
     
+
     def info_display(self):
         display_text =  (f"steps:{self.steps} | ping:{self.ping:.4f} | render_ping:{self.render_ping:.4f}")  
         if self.pickedMO is not None:
             display_text += f"\npickedMO: {self.pickedMO.pose.name}"
         if __name__ == "__main__":
-            display_text += f"\n -> z,q,s,d : move    -> e : pickup/putdown \n -> r : reset           -> t : add obstacle"
+            display_text += f"\n -> z,q,s,d : move    -> e : pickup/putdown \n -> r : reset           -> t : add obstacle \n -> f : toggle pose render"
         # Create an image with text
         text_image = np.zeros([150,400])
         font_scale = 0.5
@@ -268,7 +280,8 @@ if __name__ == "__main__":
     env_list=["200x200_empty","200x200_map1","200x200_map2"]
     i = 0
     env = NAMOENV2D(env_list[i%3])
-    env.render()
+    render_pose=True
+    env.render(render_pose)
     env.info_display()
     pressed_keys = set()
 
@@ -288,6 +301,8 @@ if __name__ == "__main__":
                 pressed_keys.add('r')
             elif key.char == 't':
                 pressed_keys.add('t')
+            elif key.char == 'f':
+                pressed_keys.add('f')
         except AttributeError:
             if key == keyboard.Key.esc:
                 pressed_keys.add('esc')
@@ -338,9 +353,13 @@ if __name__ == "__main__":
         if 't' in pressed_keys:
             env.add_obstacle()
             pressed_keys.discard('t')
+        if 'f' in pressed_keys:
+            render_pose = not render_pose
+            pressed_keys.discard('f')
+
         else:pass
         env.step(linear_displacement,angular_displacement, interaction)
-        env.render()
+        env.render(render_pose)
         env.info_display()
     cv2.destroyAllWindows()
 
