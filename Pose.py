@@ -1,4 +1,5 @@
 import numpy as np
+import math
 import cv2
 from utils import mod, rotate_vec, pose_to_parent_frame, pose_to_brother_frame, draw_line, draw_vec, draw_text
 
@@ -36,7 +37,7 @@ class Pose:
         self.children = []
         self.name = name
         self.color = color
-    
+
     def __repr__(self) -> str:
         if self.name is not None:
             return self.name
@@ -158,7 +159,7 @@ class Pose:
         col = int(x*resolution)
         return  [row, col, orientation]
     
-    def draw(self, img, resolution, color, thickness, length):
+    def draw(self, img, resolution, color, thickness, length, draw_position=True):
         """
         Draws an arrow representing the pose on the given image.
 
@@ -169,33 +170,19 @@ class Pose:
             color (tuple): (B,G,R) The color of the line.
             thickness (int): The thickness of the line.
         """
-        thickness = int(thickness * resolution/200)
-        if thickness==0: thickness=1
+        thickness = math.ceil(thickness * resolution/200)
         row, col, orientation = self.get_image_pose(resolution, img.shape[0])
         vec = rotate_vec([length*resolution,0], orientation)
         draw_vec(img, vec, [col,row], color, thickness)
-        draw_text(img, self.name, [col,row+length*resolution], color, thickness//2, resolution/150)
-    
-    def draw_position(self, img, resolution, color, thickness):
-        """
-        Draws a line representing the position [x,y] of the pose 
-        on the given image with its parent position as origin.
+        draw_text(img, self.name, [col,row+length*resolution], color, math.ceil(thickness/2), resolution/150)
+        if draw_position==True:
+            parent_pose = self.parent
+            if parent_pose is not None:
+                origin_row,origin_col = parent_pose.get_image_pose(resolution,img.shape[0])[0:2]
+                end_row,end_col = self.get_image_pose(resolution,img.shape[0])[0:2]
+                draw_line(img,[origin_col,origin_row],[end_col,end_row], color, math.ceil(thickness/3))
 
-        INPUTS:
-            img (array): The image to draw on.
-            resolution (float): pxl/m
-            color (tuple): (B,G,R) The color of the line.
-            thickness (int): The thickness of the line.
-        """
-        thickness = int(thickness * resolution/200)
-        if thickness==0: thickness=1
-        parent_pose = self.parent
-        if parent_pose is not None:
-            origin_row,origin_col = parent_pose.get_image_pose(resolution,img.shape[0])[0:2]
-            end_row,end_col = self.get_image_pose(resolution,img.shape[0])[0:2]
-            draw_line(img,[origin_col,origin_row],[end_col,end_row], color, thickness)
-
-    def draw_descendants(self, img, resolution, position_thickness=2, arrow_thickness=7, arrow_length=0.2):
+    def draw_descendants(self, img, resolution, draw_position=True, thickness=7, arrow_length=0.2):
         pose_list = self.get_descendants()
         pose_list.remove(self)
         colors = [(255, 0, 0),(0, 255, 0),(0, 165, 255),(238, 130, 238),(0, 0, 255)]
@@ -205,9 +192,7 @@ class Pose:
                 color = pose.color
             else:
                 color = colors[rank]
-            pose.draw(img, resolution, color, (arrow_thickness-rank), arrow_length-rank*arrow_length/10)
-            pose.draw_position(img, resolution, color, position_thickness)
-
+            pose.draw(img, resolution, color, (thickness-rank), arrow_length-rank*arrow_length/10, draw_position)
 
 def difference(pose1,pose2):
     pose1_x, pose1_y, pose1_orientation = pose1.get_global_pose()
@@ -218,15 +203,10 @@ def difference(pose1,pose2):
 def compare_poses(pose1,pose2,distance_lim,angle_lim):
     vec_p1p2, angle = difference(pose1,pose2)
     length = np.sqrt(vec_p1p2[0]**2+vec_p1p2[1]**2)
-    print(angle)
-    print(abs(angle))
     if length < distance_lim and abs(angle) < angle_lim:
         return True
     else:
         return False
-
-
-
 
 
 if __name__ == "__main__":
@@ -262,15 +242,14 @@ if __name__ == "__main__":
         pose11.move(0.05,5)
         pose111.move(0.05,5)
         poseX.move(0.05, 5)
-        print(compare_poses(pose1,pose11, 0.2, 30))
         # create the image
         img = np.ones((8*resolution, 8*resolution, 3), dtype=np.uint8) * 255
         origin.draw_descendants(img,resolution)
         # computre fps and add text info
         dt = time.time()-t
-        draw_text(img, f"res={resolution} | dt={dt:.4f}", [0,resolution], (0,0,0), int(resolution/50), resolution/50)
-        draw_text(img, "press a,z,e to change referential of X", [0,img.shape[0]-resolution], (0,0,0), int(resolution/100), resolution/100)
-        draw_text(img, "press q,s,d to change resolution", [0,img.shape[0]-resolution/2], (0,0,0), int(resolution/100), resolution/100)
+        cv2.putText(img, f"res={resolution} | dt={dt:.4f}", (0,resolution), cv2.FONT_HERSHEY_SIMPLEX, resolution/50, (0,0,0), int(resolution/50))
+        cv2.putText(img, "press a,z,e to change referential of X", (0,img.shape[0]-resolution), cv2.FONT_HERSHEY_SIMPLEX, resolution/100, (0,0,0), int(resolution/100))
+        cv2.putText(img, "press q,s,d to change resolution", (0,img.shape[0]-resolution//2), cv2.FONT_HERSHEY_SIMPLEX, resolution/100, (0,0,0), int(resolution/100))
         cv2.imshow('Poses', img)
         # Wait for a key press
         key = cv2.waitKey(0) & 0xFF

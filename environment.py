@@ -10,6 +10,7 @@ from scipy import ndimage
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
 
+
 from Pose import Pose, compare_poses, difference
 from utils import mod
 
@@ -40,6 +41,12 @@ class MovableObject:
         self.rollback_position = self.pose.position
         self.rollback_orientation = self.pose.orientation
 
+    def __del__(self):
+        self.pose.parent.children.remove(self.pose)
+    
+    def __repr__(self) -> str:
+        return str(self.pose)
+
     def move(self, linear_displacement, angular_displacement):
         self.rollback_position = self.pose.position.copy()
         self.rollback_orientation = self.pose.orientation
@@ -63,18 +70,22 @@ class MovableObject:
         rotatedimage = ndimage.rotate(self.image.copy(), orientation, reshape=True)
         # compute the slicing indices
         LenRow, LenCol = rotatedimage.shape
-        start_row = row-LenRow//2
-        end_row = row+(LenRow-LenRow//2)
-        start_col = col-LenCol//2
-        end_col = col+(LenCol-LenCol//2)
-        slice_height = end_row - start_row
-        slice_width = end_col - start_col
-        # Check if slice dimensions match the RotatedImage dimensions
-        if slice_height==rotatedimage.shape[0] and slice_width==rotatedimage.shape[1] :
-            # Check if the indices are within the bounds of the map
-            if (0 <= start_row < mask.shape[0] and 0 <= end_row <= mask.shape[0] and
-                0 <= start_col < mask.shape[1] and 0 <= end_col <= mask.shape[1]):
-                mask[start_row : end_row, start_col : end_col] += rotatedimage
+        start_row = row - LenRow // 2
+        end_row = row + (LenRow - LenRow // 2)
+        start_col = col - LenCol // 2
+        end_col = col + (LenCol - LenCol // 2)
+        # Calculate the intersection between the rotated image and the map array
+        mask_start_row = max(start_row, 0)
+        mask_end_row = min(end_row, mask.shape[0])
+        mask_start_col = max(start_col, 0)
+        mask_end_col = min(end_col, mask.shape[1])
+        img_start_row = max(0, -start_row)
+        img_end_row = img_start_row + (mask_end_row - mask_start_row)
+        img_start_col = max(0, -start_col)
+        img_end_col = img_start_col + (mask_end_col - mask_start_col)
+        # Check if the indices are within the bounds of the map
+        if mask_start_row < mask_end_row and mask_start_col < mask_end_col:
+            mask[mask_start_row:mask_end_row, mask_start_col:mask_end_col] += rotatedimage[img_start_row:img_end_row, img_start_col:img_end_col]
         return mask
 
 class NAMOENV2D:
@@ -86,12 +97,11 @@ class NAMOENV2D:
         - config_dict (dict): dictionary descripting the initial configuration of the environment, read from the config_name.yaml in the map's subfolder.
         - REAL_RESOLUTION (float): resolution of the obstacle map (in pxl/m).
         - ORIGIN (pose): pose of the origin of the real coordinates on the map.
-    
-        MODIFIABLE:
-        - episodes (int): current episode number
-        - steps (int): current step number
         - start (pose)
         - goal (pose)
+    
+        MODIFIABLE:
+        - steps (int): current step number
         - ROB (MovableObject): robot for this episode.
         - MO_list (list of MovableObjects): MO list for this episode.
         - path_map (np.uint8): 1 in path, 0 outside of path
@@ -108,8 +118,8 @@ class NAMOENV2D:
                 - config_name (str)
                 - seed (int)
         """
+        t=time.time()
         random.seed(seed)
-        ### INITIALISE FIXED ATTRIBUTES:
         # MAP parameters
         map_path="maps/"+map_name+"/map.pgm"
         SCmap_path="maps/"+map_name+"/SCmap.npy"
@@ -121,108 +131,41 @@ class NAMOENV2D:
             self.config_dict=yaml.load(f, Loader=yaml.SafeLoader)
         self.REAL_RESOLUTION=int(self.config_dict["real_resolution"])
         self.ORIGIN=Pose(self.config_dict["origin_pose"],name="ORIGIN")
-        ### INITIALISE MODIFIABLE ATTRIBUTES:
-        # count the number of episodes
-        self.episodes = 0
-        self.reset()
-
-
-    def reset(self, random_offset=False, random_position=False, MO_number = 1 ):
-        """reset environment to initial configuration
-            INPUT:
-                - rand_offset (bool): add a random offset to initial positions
-                - rand_pos (bool): reset environment to a randomly chosen initial configuration instead.
-        """
-        t=time.time()
-        # update counters
-        self.steps = 1
-        self.episodes += 1
-        # empty MO list
+        self.goal = Pose(self.config_dict['goal_pose'],self.ORIGIN,"goal",color=(0,0,255))
+        self.start = Pose(self.config_dict['ROB_init_dict']['pose'],self.ORIGIN,"start",color=(0,0,255))
+        self.ROB = MovableObject(self,self.config_dict['ROB_init_dict'],'ROB')
         self.MO_list=[]
+        i=0
+        for MO_init_dict in self.config_dict['MO_init_dicts_list']:
+            self.MO_list.append(MovableObject(self,MO_init_dict,f"{i}"))
+            i+=1
         self.pickedMO = None
-
-        max_tries = 10000
-        min_path_len = 3 #unit: m
-        if random_position:
-            pass
-        #     free_ImgPos = np.where(self.FO_map == 0)
-        #     free_ImgPos_list = list(zip(free_ImgPos[0], free_ImgPos[1])) 
-        #     for tries in range(max_tries):
-        #         self.goal = Pose(free_ImgPos_list[np.random.choice(len(free_ImgPos_list))], random.randint(0,359), self.ORIGIN, "goal")
-        #         self.ROB = Robot(env=self, init_dict={'name':'ROB', 'pose':free_ImgPos_list[np.random.choice(len(free_ImgPos_list))]+[random.randint(0,359)] })
-        #         self.get_path_map()
-        #         # units: cells x (pxl/cell) / (pxl/m) = m OK
-        #         if len(self.path_row)*self.DIJKSTRA_RESOLUTION/self.REAL_RESOLUTION > min_path_len:
-        #             break
-        #     for i in range(MO_number):
-        #         for tries in range(max_tries):
-        #             MO_init_angle = random.randint(0,359)
-        #             MO_init_ImgPos = free_ImgPos_list[np.random.choice(len(free_ImgPos_list))]
-        #             MO_init_RealPos = convert_ImgPos_to_RealPos(MO_init_ImgPos, self.ORIGIN_PXL, self.REAL_RESOLUTION)
-        #             MO_name = random.choice(['MO1','MO2'])
-        #             self.MO.append(MovableObstacle(env=self, init_dict={'name': MO_name, 'init_RealPos': MO_init_RealPos, 'init_angle': MO_init_angle}))
-        #             #check if there is enough space for the ROB to pick the MO
-        #             for pick_pose in self.MO[i].pick_poses:
-        #                 test_position = [x*1.5 for x in pick_pose["position"]]
-        #                 pick_RealPos = [self.MO[i].get_RealPos()[0]+test_position[0]*math.cos(math.radians(self.MO[i].get_angle()))-test_position[1]*math.sin(math.radians(self.MO[i].get_angle())),
-        #                                  self.MO[i].get_RealPos()[1]+test_position[0]*math.sin(math.radians(self.MO[i].get_angle()))+test_position[1]*math.cos(math.radians(self.MO[i].get_angle()))]
-        #                 pick_angle = self.MO[i].get_angle() + pick_pose['angle']
-        #                 self.MO.append(MovableObstacle(env=self, init_dict={'name': 'ROB', 'init_RealPos':pick_RealPos, 'init_angle':pick_angle}))
-        #             if self.verbose > 1 : self.small_render(); cv2.waitKey(100)
-        #             self._check_collision()
-        #             if not self.collision :
-        #                 for _ in range(len(self.MO[i].pick_poses)):
-        #                     self.MO.pop()
-        #                 self._check_success()
-        #                 if self.MO[i].InPath:
-        #                     break
-        #                 else:
-        #                     self.MO.pop()
-        #             else:
-        #                 for _ in range(len(self.MO[i].pick_poses)):
-        #                     self.MO.pop()
-        #                 self.MO.pop()
-
-        # elif random_offset:
-        #         for tries in range(max_tries):
-        #             #add a random offset array to the goal_pos attribute
-        #             self.goal_RealPos = self.goal_init_RealPos + np.array([random.uniform(-0.2, 0.2), random.uniform(-0.2, 0.2)],dtype=np.float32)
-        #             self.goal_ImgPos = convert_RealPos_to_ImgPos(self.goal_RealPos, self.ORIGIN_PXL, self.REAL_RESOLUTION)
-        #             #add a random offset array to the robot's starting position
-        #             self.ROB = Robot(env=self, init_dict=self.ROB_init_dict)
-        #             self.ROB.set_RealPos(self.ROB.get_RealPos()+np.array([random.uniform(-0.2, 0.2), random.uniform(-0.2, 0.2)],dtype=np.float32))
-        #             self.ROB.set_angle(self.ROB.get_angle()+random.uniform(-30, 30))
-        #             self.get_path_map()
-        #             # units: cells x (pxl/cell) / (pxl/m) = m OK
-        #             if len(self.path_row)*self.DIJKSTRA_RESOLUTION/self.REAL_RESOLUTION > min_path_len:
-        #                 break
-        #         for i in range(len(self.MO_init_dicts_list)):
-        #             for tries in range(max_tries):
-        #                 #for each MO, add a random offset array [offset_x,offset_y] to the pos array [x,y]
-        #                 self.MO.append(MovableObstacle(env=self, init_dict=self.MO_init_dicts_list[i]))
-        #                 self.MO[i].set_RealPos(self.MO[i].get_RealPos()+np.array([random.uniform(-0.2, 0.2), random.uniform(-0.2, 0.2)],dtype=np.float32))
-        #                 self.MO[i].set_angle(self.MO[i].get_angle()+random.uniform(-30, 30))
-        #                 self._check_collision()
-        #                 if not self.collision:
-        #                     break
-        #                 else:
-        #                     self.MO.pop()
-
-        else:
-            self.goal = Pose(self.config_dict['goal_pose'],self.ORIGIN,"goal",color=(0,0,255))
-            self.start = Pose(self.config_dict['ROB_init_dict']['pose'],self.ORIGIN,"start",color=(0,0,255))
-            self.ROB = MovableObject(self,self.config_dict['ROB_init_dict'],'ROB')
-            i=0
-            for MO_init_dict in self.config_dict['MO_init_dicts_list']:
-                self.MO_list.append(MovableObject(self,MO_init_dict,f"{i}"))
-                i+=1
+        self.steps = 1
         self._check_collision()
         self.ping=time.time()-t
-        # print the starting attributes 
         if __name__ == "__main__":
             print(f"goal: {self.goal.get_local_pose()}, goal_image {self.goal.get_image_pose(self.REAL_RESOLUTION,self.FO_map.shape[0])}")
             print(f"start: {self.start.get_local_pose()}, start_image {self.start.get_image_pose(self.REAL_RESOLUTION,self.FO_map.shape[0])}")
-        
+
+    def add_obstacle(self, type=None, pose=None):
+        t=time.time()
+        if type is None:
+            type = random.choice(["MOa", "MOb", "MOc"])
+        if pose is None:
+            max_tries = 1000
+            for tries in range(max_tries):
+                orig_x,orig_y = self.ORIGIN.position
+                width = self.FO_map.shape[0] // self.REAL_RESOLUTION
+                height= self.FO_map.shape[1] // self.REAL_RESOLUTION
+                rand_x = random.uniform(-orig_x,width-orig_x)
+                rand_y = random.uniform(-orig_y,height-orig_y)
+                rand_orientation = random.uniform(-180,180)
+                self.MO_list.append(MovableObject(self,{'type': type, 'pose': [rand_x,rand_y,rand_orientation]}, f"{len(self.MO_list)}" ))
+                if self._check_collision():
+                    self.MO_list.pop()
+                else:
+                    break
+        self.ping=time.time()-t
     
     def step(self, linear_displacement, angular_displacement, interaction=False):
         """ the environment takes a timestep 
@@ -239,14 +182,13 @@ class NAMOENV2D:
             print("COLLISION")
             self.ROB.rollback()
             self._check_collision()
-        print()
         if interaction:
             if self.pickedMO is None:
                 done=False
                 for MO in self.MO_list:
                     for MOpick in MO.pick_poses:
                         for ROBpick in self.ROB.pick_poses:
-                            if compare_poses(ROBpick,MOpick,0.1,10):
+                            if compare_poses(ROBpick,MOpick,0.1,15):
                                 MO.pose.to_brother_frame(self.ROB.pose)
                                 # MO.pose.position = ROBpick.position - MOpick.position
                                 # MO.pose.orientation = mod(ROBpick.orientation - MOpick.orientation)
@@ -280,30 +222,32 @@ class NAMOENV2D:
             return False
     
     def render(self, render_pose=True):
+        t = time.time()
         image = np.where(self.collision_map == 1, 0, 255).astype(np.uint8)
         if render_pose:
             res_factor = 4
             image = cv2.resize(image, (image.shape[1]*res_factor,image.shape[0]*res_factor), interpolation=cv2.INTER_NEAREST)
             # Convert to a three-channel image using cvtColor
             image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
-            self.ORIGIN.draw_descendants(image,self.REAL_RESOLUTION*res_factor)
+            self.ORIGIN.draw_descendants(image,self.REAL_RESOLUTION*res_factor, draw_position=False)
         cv2.namedWindow("render", cv2.WINDOW_NORMAL)
         cv2.resizeWindow("render", 400, 400)
         cv2.moveWindow("render", 0, 0)
         cv2.imshow("render", image)
         cv2.waitKey(1)
+        self.render_ping = time.time()-t
     
     def info_display(self):
-        display_text =  (f"episodes:{self.episodes} | steps:{self.steps} | ping:{self.ping:.4f}")  
+        display_text =  (f"steps:{self.steps} | ping:{self.ping:.4f} | render_ping:{self.render_ping:.4f}")  
         if self.pickedMO is not None:
-            display_text += f"\n  pickedMO: {self.pickedMO.pose.name}"
+            display_text += f"\npickedMO: {self.pickedMO.pose.name}"
         if __name__ == "__main__":
-            display_text += f"\n press z,q,s,d to move \n press spacebar to pick/put"
+            display_text += f"\n -> z,q,s,d : move    -> e : pickup/putdown \n -> r : reset           -> t : add obstacle"
         # Create an image with text
         text_image = np.zeros([150,400])
-        font_scale = 0.6
+        font_scale = 0.5
         color = 255
-        thickness = 2
+        thickness = 1
         x_position = 10
         y_position = 20
         line_height = 30
@@ -319,25 +263,82 @@ class NAMOENV2D:
 
 
 if __name__ == "__main__":
-    env = NAMOENV2D("200x200_map2")
+    from pynput import keyboard
+
+    env_list=["200x200_empty","200x200_map1","200x200_map2"]
+    i = 0
+    env = NAMOENV2D(env_list[i%3])
+    env.render()
+    env.info_display()
+    pressed_keys = set()
+
+    def on_press(key):
+        try:
+            if key.char == 'e':
+                pressed_keys.add('e')
+            elif key.char == 'z':
+                pressed_keys.add('z')
+            elif key.char == 's':
+                pressed_keys.add('s')
+            elif key.char == 'q':
+                pressed_keys.add('q')
+            elif key.char == 'd':
+                pressed_keys.add('d')
+            elif key.char == 'r':
+                pressed_keys.add('r')
+            elif key.char == 't':
+                pressed_keys.add('t')
+        except AttributeError:
+            if key == keyboard.Key.esc:
+                pressed_keys.add('esc')
+
+    def on_release(key):
+        try:
+            if key.char == 'z':
+                pressed_keys.discard('z')
+            elif key.char == 's':
+                pressed_keys.discard('s')
+            elif key.char == 'q':
+                pressed_keys.discard('q')
+            elif key.char == 'd':
+                pressed_keys.discard('d')
+        except AttributeError:
+            if key == keyboard.Key.esc:
+                pressed_keys.discard('esc')
+
+    listener = keyboard.Listener(on_press=on_press, on_release=on_release)
+    listener.start()
+
     while True:
+        time.sleep(0.01)
         linear_displacement=0
         angular_displacement=0
         interaction = False
         # Wait for a key press
-        key = cv2.waitKey(0) & 0xFF
-        if key == 32:  # Press "space" key
-            interaction = True
-        elif key == 122:  # Press "z" key
-            linear_displacement=0.05
-        elif key == 115:  # Press "s" key
-            linear_displacement=-0.05
-        elif key == 113:  # Press "q" key
-            angular_displacement=2
-        elif key == 100:  # Press "d" key
-            angular_displacement=-2
-        elif key == 27:
+        while not pressed_keys:
+            cv2.waitKey(10)
+        if 'esc' in pressed_keys:
             break
+        if 'z' in pressed_keys:
+            linear_displacement = 0.05
+        if 's' in pressed_keys:
+            linear_displacement = -0.05
+        if 'q' in pressed_keys:
+            angular_displacement = 2
+        if 'd' in pressed_keys:
+            angular_displacement = -2
+        if 'e' in pressed_keys:
+            interaction = True
+            pressed_keys.discard('e')
+        if 'r' in pressed_keys:
+            i += 1
+            env = NAMOENV2D(env_list[i % 3])
+            env.render()
+            pressed_keys.discard('r')
+        if 't' in pressed_keys:
+            env.add_obstacle()
+            pressed_keys.discard('t')
+        else:pass
         env.step(linear_displacement,angular_displacement, interaction)
         env.render()
         env.info_display()
