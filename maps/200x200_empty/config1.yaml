@@ -1,6 +1,5 @@
-real_resolution: 40         #unit:[pxl/m]
-dijkstra_resolution: 5      #unit:[pxl/cell]
-#unit:[m] for everything below
+#unit:[m] 
+map_shape : [5,5]
 origin_pose: [2.5,2.5,0]   
 goal_pose: [1.5,0,0]
 ROB_init_dict: {'type': 'ROB', 'pose': [-1.5, 0, 0]}

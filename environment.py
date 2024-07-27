@@ -33,11 +33,11 @@ class MovableObject:
         path="objects/"+init_dict['type']+".yaml"
         with open(path) as f:
             self.param_dict=yaml.load(f, Loader=yaml.SafeLoader)
+        self.imageshape = np.array(self.param_dict['shape'],dtype=np.float32)
+        self.image = np.array(self.param_dict['image'], dtype=np.uint8)
         self.pick_poses = []
         for pick_pose in self.param_dict['pick_poses']:
             self.pick_poses.append(Pose(pick_pose,self.pose))
-        self.imageshape = np.array(self.param_dict['shape'],dtype=np.float32) * self.env.REAL_RESOLUTION
-        self.image = cv2.resize(np.array(self.param_dict['image'], dtype=np.uint8), tuple(self.imageshape.astype(int)), interpolation=cv2.INTER_NEAREST)
         self.rollback_position = self.pose.position
         self.rollback_orientation = self.pose.orientation
 
@@ -65,9 +65,11 @@ class MovableObject:
         # create mask with shape of global map
         mask = np.zeros(self.env.FO_map.shape, dtype=np.uint8)
         # get the MovableObkect's pose in the mask array coordinates
-        row, col, orientation = self.pose.get_image_pose(self.env.REAL_RESOLUTION,mask.shape[0])
+        row, col, orientation = self.pose.get_image_pose(self.env.RESOLUTION,mask.shape[0])
+        # resize the image according to resolution and real shape
+        image=cv2.resize(self.image.copy(), (int(self.imageshape[0]*self.env.RESOLUTION),int(self.imageshape[1]*self.env.RESOLUTION)), interpolation=cv2.INTER_NEAREST)
         # rotate the image to show object orientation
-        rotatedimage = ndimage.rotate(self.image.copy(), orientation, reshape=True)
+        rotatedimage = ndimage.rotate(image, orientation, reshape=True)
         # compute the slicing indices
         LenRow, LenCol = rotatedimage.shape
         start_row = row - LenRow // 2
@@ -92,15 +94,18 @@ class NAMOENV2D:
     """ custom environment for namo task.
     ATTRIBUTES:
         FIXED:
-        - FO_map (np.uint8): fixed obstacle map, read from the map.pgm file in the map's subfolder. (0 -> free space ; 1 -> fixed obstacle)
-        - SC_map (np.float32): Social cost map, read from the SCmap.npy in the map's subfolder.
+        - original_FO_map (np.uint8): fixed obstacle map, read from the map.pgm file in the map's subfolder. (0 -> free space ; 1 -> fixed obstacle)
+        - original_SC_map (np.float32): Social cost map, read from the SCmap.npy in the map's subfolder.
         - config_dict (dict): dictionary descripting the initial configuration of the environment, read from the config_name.yaml in the map's subfolder.
-        - REAL_RESOLUTION (float): resolution of the obstacle map (in pxl/m).
+        - MAP_SHAPE (list of floats): shape of the map in meters x meters
         - ORIGIN (pose): pose of the origin of the real coordinates on the map.
         - start (pose)
         - goal (pose)
     
         MODIFIABLE:
+        - RESOLUTION (float): resolution of the obstacle map (in pxl/m).
+        - FO_map (np.uint8): resizing of the original_FO_map to fit the MAP_SHAPE and RESOLUTION
+        - SC_map (np.float32): resizing of the original_SC_map to fit the MAP_SHAPE and RESOLUTION
         - steps (int): current step number
         - ROB (MovableObject): robot for this episode.
         - MO_list (list of MovableObjects): MO list for this episode.
@@ -111,25 +116,26 @@ class NAMOENV2D:
     """
 
 
-    def __init__(self,map_name="200x200_empty",config_name="config1",seed=10):
-        """set several attributes that will be fixed for this environment object:
-            INPUT:
-                - map_name (str)
-                - config_name (str)
-                - seed (int)
+    def __init__(self,map_name="200x200_empty",config_name="config1", resolution=40, seed=10):
+        """
+        INPUT:
+            - map_name (str)
+            - config_name (str)
+            - resolution (int)
+            - seed (int)
         """
         t=time.time()
         random.seed(seed)
         # MAP parameters
         map_path="maps/"+map_name+"/map.pgm"
         SCmap_path="maps/"+map_name+"/SCmap.npy"
-        self.FO_map =np.array( 1 - cv2.imread(map_path, 0)//230, dtype=np.uint8)
-        self.SC_map = np.load(SCmap_path)
+        self.original_FO_map =np.array( 1 - cv2.imread(map_path, 0)//230, dtype=np.uint8)
+        self.original_SC_map = np.load(SCmap_path)
         # CONFIG parameters
         config_path="maps/"+map_name+"/"+config_name+".yaml"
         with open(config_path) as f:
             self.config_dict=yaml.load(f, Loader=yaml.SafeLoader)
-        self.REAL_RESOLUTION=int(self.config_dict["real_resolution"])
+        self.MAP_SHAPE=self.config_dict["map_shape"]
         self.ORIGIN=Pose(self.config_dict["origin_pose"],name="ORIGIN")
         self.goal = Pose(self.config_dict['goal_pose'],self.ORIGIN,"goal",color=(0,0,255))
         self.start = Pose(self.config_dict['ROB_init_dict']['pose'],self.ORIGIN,"start",color=(0,0,255))
@@ -141,11 +147,18 @@ class NAMOENV2D:
             i+=1
         self.pickedMO = None
         self.steps = 1
+        self.set_resolution(resolution)
         self._check_collision()
-        self.ping=time.time()-t
+        self.process_ping=time.time()-t
         if __name__ == "__main__":
-            print(f"goal: {self.goal.get_local_pose()}, goal_image {self.goal.get_image_pose(self.REAL_RESOLUTION,self.FO_map.shape[0])}")
-            print(f"start: {self.start.get_local_pose()}, start_image {self.start.get_image_pose(self.REAL_RESOLUTION,self.FO_map.shape[0])}")
+            print(f"goal: {self.goal.get_local_pose()}, goal_image {self.goal.get_image_pose(self.RESOLUTION,self.FO_map.shape[0])}")
+            print(f"start: {self.start.get_local_pose()}, start_image {self.start.get_image_pose(self.RESOLUTION,self.FO_map.shape[0])}")
+
+
+    def set_resolution(self, resolution):
+        self.RESOLUTION=int(resolution)
+        self.FO_map = cv2.resize(self.original_FO_map, (int(self.MAP_SHAPE[0]*self.RESOLUTION),int(self.MAP_SHAPE[1]*self.RESOLUTION)), interpolation=cv2.INTER_NEAREST)
+        self.SC_map = cv2.resize(self.original_SC_map, (int(self.MAP_SHAPE[0]*self.RESOLUTION),int(self.MAP_SHAPE[1]*self.RESOLUTION)), interpolation=cv2.INTER_NEAREST)
 
 
     def _check_collision(self):
@@ -183,8 +196,7 @@ class NAMOENV2D:
             max_tries = 1000
             for tries in range(max_tries):
                 orig_x,orig_y = self.ORIGIN.position
-                width = self.FO_map.shape[0] // self.REAL_RESOLUTION
-                height= self.FO_map.shape[1] // self.REAL_RESOLUTION
+                width, height = self.MAP_SHAPE
                 rand_x = random.uniform(-orig_x,width-orig_x)
                 rand_y = random.uniform(-orig_y,height-orig_y)
                 rand_orientation = random.uniform(-180,180)
@@ -193,7 +205,7 @@ class NAMOENV2D:
                     self.MO_list.pop()
                 else:
                     break
-        self.ping=time.time()-t
+        self.process_ping=time.time()-t
     
 
     def step(self, linear_displacement, angular_displacement, interaction=False):
@@ -208,7 +220,6 @@ class NAMOENV2D:
         self.steps += 1
         self.ROB.move(linear_displacement,angular_displacement)
         if self._check_collision():
-            print("COLLISION")
             self.ROB.rollback()
             self._check_collision()
         if interaction:
@@ -229,20 +240,19 @@ class NAMOENV2D:
             else:
                 self.pickedMO.pose.to_parent_frame()
                 self.pickedMO = None
-        self.ping=time.time()-t
+        self.process_ping=time.time()-t
 
 
-    def render(self, render_pose=True):
+    def render(self, pose_resolution_factor=4):
         t = time.time()
         image = np.where(self.collision_map == 1, 0, 255).astype(np.uint8)
-        if render_pose:
-            res_factor = 4
-            image = cv2.resize(image, (image.shape[1]*res_factor,image.shape[0]*res_factor), interpolation=cv2.INTER_NEAREST)
+        if pose_resolution_factor >= 1:
+            image = cv2.resize(image, (int(image.shape[1]*pose_resolution_factor),int(image.shape[0]*pose_resolution_factor)), interpolation=cv2.INTER_NEAREST)
             # Convert to a three-channel image using cvtColor
             image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
-            self.ORIGIN.draw_descendants(image,self.REAL_RESOLUTION*res_factor, draw_position=False)
+            self.ORIGIN.draw_descendants(image,self.RESOLUTION*pose_resolution_factor, draw_position=False)
         cv2.namedWindow("render", cv2.WINDOW_NORMAL)
-        cv2.resizeWindow("render", 400, 400)
+        cv2.resizeWindow("render", 650, 650)
         cv2.moveWindow("render", 0, 0)
         cv2.imshow("render", image)
         cv2.waitKey(1)
@@ -250,13 +260,12 @@ class NAMOENV2D:
     
 
     def info_display(self):
-        display_text =  (f"steps:{self.steps} | ping:{self.ping:.4f} | render_ping:{self.render_ping:.4f}")  
-        if self.pickedMO is not None:
-            display_text += f"\npickedMO: {self.pickedMO.pose.name}"
+        display_text =  (f"steps:{self.steps} \nRESOLUTION:{self.RESOLUTION}(pxl/m) \nprocess_ping:{self.process_ping:.4f} \nrender_ping:{self.render_ping:.4f} \npickedMO: {self.pickedMO}") 
         if __name__ == "__main__":
-            display_text += f"\n -> z,q,s,d : move    -> e : pickup/putdown \n -> r : reset           -> t : add obstacle \n -> f : toggle pose render"
+            display_text += f"\n -> z,q,s,d : move \n -> e : interact \n -> r : reset \n -> t : add obstacle "
+            display_text += f"\n -> w, x : resolution*2, resolution/2  \n -> c, v : pose_resolution_factor +1, -1 "
         # Create an image with text
-        text_image = np.zeros([150,400])
+        text_image = np.zeros([650,300])
         font_scale = 0.5
         color = 255
         thickness = 1
@@ -269,8 +278,8 @@ class NAMOENV2D:
             cv2.putText(text_image, line, (x_position, y), cv2.FONT_HERSHEY_SIMPLEX, font_scale, color, thickness, cv2.LINE_AA)
         window_name = "info"
         cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-        cv2.resizeWindow(window_name, 400, 240)
-        cv2.moveWindow(window_name, 0, 430)
+        cv2.resizeWindow(window_name, 300, 650)
+        cv2.moveWindow(window_name, 650, 0)
         cv2.imshow(window_name, text_image)
 
 
@@ -280,16 +289,14 @@ if __name__ == "__main__":
     env_list=["200x200_empty","200x200_map1","200x200_map2"]
     i = 0
     env = NAMOENV2D(env_list[i%3])
-    render_pose=True
-    env.render(render_pose)
+    pose_resolution_factor = 4
+    env.render(pose_resolution_factor)
     env.info_display()
     pressed_keys = set()
 
     def on_press(key):
         try:
-            if key.char == 'e':
-                pressed_keys.add('e')
-            elif key.char == 'z':
+            if key.char == 'z':
                 pressed_keys.add('z')
             elif key.char == 's':
                 pressed_keys.add('s')
@@ -297,12 +304,22 @@ if __name__ == "__main__":
                 pressed_keys.add('q')
             elif key.char == 'd':
                 pressed_keys.add('d')
+            elif key.char == 'e':
+                pressed_keys.add('e')
             elif key.char == 'r':
                 pressed_keys.add('r')
             elif key.char == 't':
                 pressed_keys.add('t')
             elif key.char == 'f':
-                pressed_keys.add('f')
+                pressed_keys.add('f')  
+            elif key.char == 'w':
+                pressed_keys.add('w')
+            elif key.char == 'x':
+                pressed_keys.add('x')
+            elif key.char == 'c':
+                pressed_keys.add('c')
+            elif key.char == 'v':
+                pressed_keys.add('v')       
         except AttributeError:
             if key == keyboard.Key.esc:
                 pressed_keys.add('esc')
@@ -325,7 +342,6 @@ if __name__ == "__main__":
     listener.start()
 
     while True:
-        time.sleep(0.01)
         linear_displacement=0
         angular_displacement=0
         interaction = False
@@ -353,13 +369,20 @@ if __name__ == "__main__":
         if 't' in pressed_keys:
             env.add_obstacle()
             pressed_keys.discard('t')
-        if 'f' in pressed_keys:
-            render_pose = not render_pose
-            pressed_keys.discard('f')
-
-        else:pass
+        if 'w' in pressed_keys:
+            env.set_resolution(env.RESOLUTION*2)
+            pressed_keys.discard('w')
+        if 'x' in pressed_keys:
+            env.set_resolution(env.RESOLUTION/2)
+            pressed_keys.discard('x')
+        if 'c' in pressed_keys:
+            pose_resolution_factor += 1
+            pressed_keys.discard('c')
+        if 'v' in pressed_keys:
+            pose_resolution_factor -= 1
+            pressed_keys.discard('v')
         env.step(linear_displacement,angular_displacement, interaction)
-        env.render(render_pose)
+        env.render(pose_resolution_factor)
         env.info_display()
     cv2.destroyAllWindows()
 
