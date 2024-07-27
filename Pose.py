@@ -71,6 +71,10 @@ class Pose:
             descendants += child.get_descendants()
         return descendants
     
+    def teleport(self, x, y, orientation):
+        self.position = np.array([x,y],dtype=np.float32)
+        self.orientation = mod(orientation)
+    
     def relocate(self, dx, dy, dtheta):
         """
         relocates the pose by translating and/or rotating it.

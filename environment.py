@@ -52,6 +52,11 @@ class MovableObject:
         self.rollback_orientation = self.pose.orientation
         self.pose.move(linear_displacement,angular_displacement)
     
+    def teleport(self, x, y, orientation):
+        self.rollback_position = self.pose.position.copy()
+        self.rollback_orientation = self.pose.orientation
+        self.pose.teleport(x, y, orientation)
+
     def rollback(self):
         self.pose.position = self.rollback_position
         self.pose.orientation = self.rollback_orientation
@@ -191,7 +196,7 @@ class NAMOENV2D:
     def add_obstacle(self, type=None, pose=None):
         t=time.time()
         if type is None:
-            type = random.choice(["MOa", "MOb", "MOc"])
+            type = random.choice(["MOa","MOb","MOc"])
         if pose is None:
             max_tries = 1000
             for tries in range(max_tries):
@@ -200,11 +205,29 @@ class NAMOENV2D:
                 rand_x = random.uniform(-orig_x,width-orig_x)
                 rand_y = random.uniform(-orig_y,height-orig_y)
                 rand_orientation = random.uniform(-180,180)
-                self.MO_list.append(MovableObject(self,{'type': type, 'pose': [rand_x,rand_y,rand_orientation]}, f"{len(self.MO_list)}" ))
-                if self._check_collision():
+                new_MO = MovableObject(self,{'type': type, 'pose': [rand_x,rand_y,rand_orientation]}, f"{len(self.MO_list)}" )
+                self.MO_list.append(new_MO)
+                self.ROB.pose.to_brother_frame(new_MO.pose)
+                for ROBpick in self.ROB.pick_poses:
+                    for MOpick in new_MO.pick_poses:
+                        pos_diff = MOpick.position - ROBpick.position
+                        orientation_diff = mod(ROBpick.orientation - MOpick.orientation)
+                        self.ROB.teleport(pos_diff[0], pos_diff[1], orientation_diff)
+                        collision = self._check_collision()
+                        self.render()
+                        cv2.waitKey(0)
+                        self.ROB.rollback()
+                        if collision:
+                            self.MO_list.pop()
+                            break
+                    if collision: break
+                self.ROB.pose.to_parent_frame()
+                if not collision: break
+        else:
+            self.MO_list.append(MovableObject(self,{'type': type, 'pose': pose}, f"{len(self.MO_list)}" ))
+            if self._check_collision():
                     self.MO_list.pop()
-                else:
-                    break
+                    print("created obstacle is in collision")
         self.process_ping=time.time()-t
     
 
