@@ -43,6 +43,10 @@ class Pose:
             return self.name
         else:
             return "unnamed_pose"
+    
+    def delete(self):
+        if self.parent is not None:
+            self.parent.children.remove(self)
 
     def get_ancestors(self):
         """
@@ -90,7 +94,7 @@ class Pose:
             - linear_displacement (float): displacement along the pose's orientation axis
             - angular_displacement (float): orientation angle variation
         """
-        dx, dy = rotate_vec([linear_displacement, 0], self.orientation) #mod(self.orientation+angular_displacement) ???
+        dx, dy = rotate_vec([linear_displacement, 0], mod(self.orientation+angular_displacement))
         self.relocate(dx, dy, angular_displacement)
     
     def to_parent_frame(self):
@@ -201,16 +205,16 @@ class Pose:
 def difference(pose1,pose2):
     pose1_x, pose1_y, pose1_orientation = pose1.get_global_pose()
     pose2_x, pose2_y, pose2_orientation = pose2.get_global_pose()
-    return [pose2_x-pose1_x,pose2_y-pose1_y], mod(pose2_orientation-pose1_orientation)
+    angle = mod(pose2_orientation-pose1_orientation)
+    vec_p1p2 = [pose2_x-pose1_x,pose2_y-pose1_y]
+    length = np.sqrt(vec_p1p2[0]**2+vec_p1p2[1]**2)
+    return  length, angle
 
 
 def compare_poses(pose1,pose2,distance_lim,angle_lim):
-    vec_p1p2, angle = difference(pose1,pose2)
-    length = np.sqrt(vec_p1p2[0]**2+vec_p1p2[1]**2)
-    if length < distance_lim and abs(angle) < angle_lim:
-        return True
-    else:
-        return False
+    """Compare two poses with a tolerance."""
+    length, angle = difference(pose1,pose2)
+    return length < distance_lim and abs(angle) < angle_lim
 
 
 if __name__ == "__main__":

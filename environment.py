@@ -42,7 +42,7 @@ class MovableObject:
         self.rollback_orientation = self.pose.orientation
 
     def __del__(self):
-        self.pose.parent.children.remove(self.pose)
+        self.pose.delete()
     
     def __repr__(self) -> str:
         return str(self.pose)
@@ -121,7 +121,8 @@ class NAMOENV2D:
     """
 
 
-    def __init__(self,map_name="200x200_empty",config_name="config1", resolution=40, seed=10):
+    def __init__(self,map_name="200x200_empty",config_name="config1", 
+                 linear_velocity = 0.1, angular_velocity = 10, resolution=40, seed=10):
         """
         INPUT:
             - map_name (str)
@@ -145,6 +146,8 @@ class NAMOENV2D:
         self.goal = Pose(self.config_dict['goal_pose'],self.ORIGIN,"goal",color=(0,0,255))
         self.start = Pose(self.config_dict['ROB_init_dict']['pose'],self.ORIGIN,"start",color=(0,0,255))
         self.ROB = MovableObject(self,self.config_dict['ROB_init_dict'],'ROB')
+        self.linear_velocity = linear_velocity  #in meter/step
+        self.angular_velocity = angular_velocity #in degree/step
         self.MO_list=[]
         i=0
         for MO_init_dict in self.config_dict['MO_init_dicts_list']:
@@ -176,10 +179,11 @@ class NAMOENV2D:
         for object in self.MO_list+[self.ROB]:
             self.collision_map+=object.get_mask()
         # if objects overlap with each other or fixed obstacles, 1+1=2. 
-        # if there is more pixels with 2 than 1/20 of the robot surface in pixels, we consider there is a collision.
+        # if there is more pixels with 2 than a max_surface, we consider there is a collision.
+        max_surface = 0
         if self.pickedMO is None:
             intersection_surface = (self.collision_map > 1).sum()
-            if intersection_surface > 0:
+            if intersection_surface > max_surface:
                 return True
             else:
                 return False
@@ -187,7 +191,7 @@ class NAMOENV2D:
             # if there is a picked MO, separate the collision check with the ROB and with the pickedMO to avoid them colliding.
             intersection_surface_1 = (self.collision_map-self.pickedMO.get_mask() > 1).sum()
             intersection_surface_2 = (self.collision_map-self.ROB.get_mask() > 1).sum()
-            if intersection_surface_1 > 0 or intersection_surface_2 > 0:
+            if intersection_surface_1 > max_surface or intersection_surface_2 > max_surface:
                 return True
             else:
                 return False
@@ -207,22 +211,9 @@ class NAMOENV2D:
                 rand_orientation = random.uniform(-180,180)
                 new_MO = MovableObject(self,{'type': type, 'pose': [rand_x,rand_y,rand_orientation]}, f"{len(self.MO_list)}" )
                 self.MO_list.append(new_MO)
-                self.ROB.pose.to_brother_frame(new_MO.pose)
-                for ROBpick in self.ROB.pick_poses:
-                    for MOpick in new_MO.pick_poses:
-                        pos_diff = MOpick.position - ROBpick.position
-                        orientation_diff = mod(ROBpick.orientation - MOpick.orientation)
-                        self.ROB.teleport(pos_diff[0], pos_diff[1], orientation_diff)
-                        collision = self._check_collision()
-                        self.render()
-                        cv2.waitKey(0)
-                        self.ROB.rollback()
-                        if collision:
-                            self.MO_list.pop()
-                            break
-                    if collision: break
-                self.ROB.pose.to_parent_frame()
-                if not collision: break
+                if not self._check_collision():
+                    break
+                self.MO_list.pop()
         else:
             self.MO_list.append(MovableObject(self,{'type': type, 'pose': pose}, f"{len(self.MO_list)}" ))
             if self._check_collision():
@@ -231,17 +222,18 @@ class NAMOENV2D:
         self.process_ping=time.time()-t
     
 
-    def step(self, linear_displacement, angular_displacement, interaction=False):
+    def step(self, linear_displacement=0, angular_displacement=0, interaction=False):
         """ the environment takes a timestep 
             the robot executes the inputed actions.
 
         INPUT:
-            linear_displacement (float)
-            angular_displacement (float)
+            linear_displacement (-1,0,1)
+            angular_displacement (-1,0,1)
+            interaction (bool)
         """
         t=time.time()
         self.steps += 1
-        self.ROB.move(linear_displacement,angular_displacement)
+        self.ROB.move(linear_displacement*self.linear_velocity,angular_displacement*self.angular_velocity)
         if self._check_collision():
             self.ROB.rollback()
             self._check_collision()
@@ -251,7 +243,7 @@ class NAMOENV2D:
                 for MO in self.MO_list:
                     for MOpick in MO.pick_poses:
                         for ROBpick in self.ROB.pick_poses:
-                            if compare_poses(ROBpick,MOpick,0.2,8):
+                            if compare_poses(ROBpick,MOpick,2*self.linear_velocity,4*self.angular_velocity):
                                 MO.pose.to_brother_frame(self.ROB.pose)
                                 self.pickedMO = MO
                                 done=True
@@ -266,14 +258,14 @@ class NAMOENV2D:
         self.process_ping=time.time()-t
 
 
-    def render(self, pose_resolution_factor=4):
+    def render(self, pose_resolution_factor=4, draw_position=False, thickness=7,  arrow_length=0.2):
         t = time.time()
         image = np.where(self.collision_map == 1, 0, 255).astype(np.uint8)
         if pose_resolution_factor >= 1:
             image = cv2.resize(image, (int(image.shape[1]*pose_resolution_factor),int(image.shape[0]*pose_resolution_factor)), interpolation=cv2.INTER_NEAREST)
             # Convert to a three-channel image using cvtColor
             image = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
-            self.ORIGIN.draw_descendants(image,self.RESOLUTION*pose_resolution_factor, draw_position=False)
+            self.ORIGIN.draw_descendants(image,self.RESOLUTION*pose_resolution_factor, draw_position, thickness, arrow_length)
         cv2.namedWindow("render", cv2.WINDOW_NORMAL)
         cv2.resizeWindow("render", 650, 650)
         cv2.moveWindow("render", 0, 0)
@@ -283,10 +275,13 @@ class NAMOENV2D:
     
 
     def info_display(self):
-        display_text =  (f"steps:{self.steps} \nRESOLUTION:{self.RESOLUTION}(pxl/m) \nprocess_ping:{self.process_ping:.4f} \nrender_ping:{self.render_ping:.4f} \npickedMO: {self.pickedMO}") 
+        display_text = f"steps:{self.steps} \nROB_imgpose:{self.ROB.pose.get_image_pose(self.RESOLUTION,self.FO_map.shape[0])} \nROB_localpose:{self.ROB.pose.get_local_pose()}"
+        display_text += f"\nlinear_velocity= {self.linear_velocity} \nangular_velocity= {self.angular_velocity} \npickedMO: {self.pickedMO}"
+        display_text += f"\nRESOLUTION:{self.RESOLUTION}(pxl/m) \nprocess_ping:{self.process_ping:.4f} \nrender_ping:{self.render_ping:.4f} "
         if __name__ == "__main__":
             display_text += f"\n -> z,q,s,d : move \n -> e : interact \n -> r : reset \n -> t : add obstacle "
-            display_text += f"\n -> w, x : resolution*2, resolution/2  \n -> c, v : pose_resolution_factor +1, -1 "
+            display_text += f"\n -> f, g : linear_velocity *2,/2 \n -> h, j : angular_velocity *2,/2 "
+            display_text += f"\n -> w, x : resolution *2,/2 \n -> c, v : pose_res_factor +1,-1 "
         # Create an image with text
         text_image = np.zeros([650,300])
         font_scale = 0.5
@@ -308,10 +303,10 @@ class NAMOENV2D:
 
 if __name__ == "__main__":
     from pynput import keyboard
-
+    
     env_list=["200x200_empty","200x200_map1","200x200_map2"]
     i = 0
-    env = NAMOENV2D(env_list[i%3])
+    env = NAMOENV2D(env_list[i%3],linear_velocity = 0.5, angular_velocity = 45)
     pose_resolution_factor = 4
     env.render(pose_resolution_factor)
     env.info_display()
@@ -334,7 +329,13 @@ if __name__ == "__main__":
             elif key.char == 't':
                 pressed_keys.add('t')
             elif key.char == 'f':
-                pressed_keys.add('f')  
+                pressed_keys.add('f')
+            elif key.char == 'g':
+                pressed_keys.add('g')            
+            elif key.char == 'h':
+                pressed_keys.add('h')            
+            elif key.char == 'j':
+                pressed_keys.add('j')
             elif key.char == 'w':
                 pressed_keys.add('w')
             elif key.char == 'x':
@@ -365,6 +366,7 @@ if __name__ == "__main__":
     listener.start()
 
     while True:
+        time.sleep(0.5)
         linear_displacement=0
         angular_displacement=0
         interaction = False
@@ -374,13 +376,13 @@ if __name__ == "__main__":
         if 'esc' in pressed_keys:
             break
         if 'z' in pressed_keys:
-            linear_displacement = 0.05
+            linear_displacement = 1
         if 's' in pressed_keys:
-            linear_displacement = -0.05
+            linear_displacement = -1
         if 'q' in pressed_keys:
-            angular_displacement = 2
+            angular_displacement = 1
         if 'd' in pressed_keys:
-            angular_displacement = -2
+            angular_displacement = -1
         if 'e' in pressed_keys:
             interaction = True
             pressed_keys.discard('e')
@@ -392,6 +394,18 @@ if __name__ == "__main__":
         if 't' in pressed_keys:
             env.add_obstacle()
             pressed_keys.discard('t')
+        if 'f' in pressed_keys:
+            env.linear_velocity *= 2
+            pressed_keys.discard('f')
+        if 'g' in pressed_keys:
+            env.linear_velocity /= 2
+            pressed_keys.discard('g')
+        if 'h' in pressed_keys:
+            env.angular_velocity *= 2
+            pressed_keys.discard('h')
+        if 'j' in pressed_keys:
+            env.angular_velocity /= 2
+            pressed_keys.discard('j')
         if 'w' in pressed_keys:
             env.set_resolution(env.RESOLUTION*2)
             pressed_keys.discard('w')
