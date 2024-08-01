@@ -47,15 +47,9 @@ class MovableObject:
     def __repr__(self) -> str:
         return str(self.pose)
 
-    def move(self, linear_displacement, angular_displacement):
+    def save_pose(self):
         self.rollback_position = self.pose.position.copy()
         self.rollback_orientation = self.pose.orientation
-        self.pose.move(linear_displacement,angular_displacement)
-    
-    def teleport(self, x, y, orientation):
-        self.rollback_position = self.pose.position.copy()
-        self.rollback_orientation = self.pose.orientation
-        self.pose.teleport(x, y, orientation)
 
     def rollback(self):
         self.pose.position = self.rollback_position
@@ -122,7 +116,7 @@ class NAMOENV2D:
 
 
     def __init__(self,map_name="200x200_empty",config_name="config1", 
-                 linear_velocity = 0.1, angular_velocity = 10, resolution=40, seed=10):
+                 linear_velocity = 0.1, angular_velocity = 9, resolution=40, seed=10):
         """
         INPUT:
             - map_name (str)
@@ -176,8 +170,10 @@ class NAMOENV2D:
         """
         # build a map with 1 on fixed obstacles (FO) and every object (MO/ROB)
         self.collision_map = self.FO_map.copy()
+        
         for object in self.MO_list+[self.ROB]:
             self.collision_map+=object.get_mask()
+        
         # if objects overlap with each other or fixed obstacles, 1+1=2. 
         # if there is more pixels with 2 than a max_surface, we consider there is a collision.
         max_surface = 0
@@ -189,8 +185,8 @@ class NAMOENV2D:
                 return False
         else:
             # if there is a picked MO, separate the collision check with the ROB and with the pickedMO to avoid them colliding.
-            intersection_surface_1 = (self.collision_map-self.pickedMO.get_mask() > 1).sum()
-            intersection_surface_2 = (self.collision_map-self.ROB.get_mask() > 1).sum()
+            intersection_surface_1 = (self.collision_map.copy()-self.pickedMO.get_mask() > 1).sum()
+            intersection_surface_2 = (self.collision_map.copy()-self.ROB.get_mask() > 1).sum()
             if intersection_surface_1 > max_surface or intersection_surface_2 > max_surface:
                 return True
             else:
@@ -233,7 +229,8 @@ class NAMOENV2D:
         """
         t=time.time()
         self.steps += 1
-        self.ROB.move(linear_displacement*self.linear_velocity,angular_displacement*self.angular_velocity)
+        self.ROB.save_pose()
+        self.ROB.pose.move(linear_displacement*self.linear_velocity,angular_displacement*self.angular_velocity)
         if self._check_collision():
             self.ROB.rollback()
             self._check_collision()
@@ -260,7 +257,7 @@ class NAMOENV2D:
 
     def render(self, pose_resolution_factor=4, draw_position=False, thickness=7,  arrow_length=0.2):
         t = time.time()
-        image = np.where(self.collision_map == 1, 0, 255).astype(np.uint8)
+        image = np.where(self.collision_map.copy() == 1, 0, 255).astype(np.uint8)
         if pose_resolution_factor >= 1:
             image = cv2.resize(image, (int(image.shape[1]*pose_resolution_factor),int(image.shape[0]*pose_resolution_factor)), interpolation=cv2.INTER_NEAREST)
             # Convert to a three-channel image using cvtColor
@@ -366,7 +363,7 @@ if __name__ == "__main__":
     listener.start()
 
     while True:
-        time.sleep(0.5)
+        time.sleep(0.1)
         linear_displacement=0
         angular_displacement=0
         interaction = False

@@ -196,6 +196,7 @@ class Pose:
         colors = [(255, 0, 0),(0, 255, 0),(0, 165, 255),(238, 130, 238),(0, 0, 255)]
         for pose in pose_list:
             rank = len(pose.get_ancestors())-2
+            if rank>4: rank=4
             if pose.color is not None:
                 color = pose.color
             else:
