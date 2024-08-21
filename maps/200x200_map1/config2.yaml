@@ -3,4 +3,5 @@ map_shape : [5,5]
 origin_pose: [2.5,2.5,0]       
 goal_pose: [1.5,0,0]
 ROB_init_dict: {'type': 'ROB', 'pose': [-1.5, 0, 0]}
-MO_init_dicts_list: []
+MO_init_dicts_list: [{'type': 'MOa' , 'pose': [0.25, 0.3, 0]},
+                     {'type': 'MOa' , 'pose': [1, -0.3, 0]}]

@@ -1,19 +1,12 @@
 import time
 import random
-import math
 import cv2
 import yaml
 import numpy as np
-import gym
-from gym import spaces
 from scipy import ndimage
-import matplotlib.pyplot as plt
-from matplotlib.colors import ListedColormap
 
-
-from Pose import Pose, compare_poses, difference
-from utils import mod
-
+from Pose import Pose, compare_poses
+from utils import realco_to_arrayco
 
 
 class MovableObject:
@@ -38,8 +31,7 @@ class MovableObject:
         self.pick_poses = []
         for pick_pose in self.param_dict['pick_poses']:
             self.pick_poses.append(Pose(pick_pose,self.pose))
-        self.rollback_position = self.pose.position
-        self.rollback_orientation = self.pose.orientation
+        self.rollback_pose = self.pose.get_pose_local()
 
     def __del__(self):
         self.pose.delete()
@@ -48,27 +40,22 @@ class MovableObject:
         return str(self.pose)
 
     def save_pose(self):
-        self.rollback_position = self.pose.position.copy()
-        self.rollback_orientation = self.pose.orientation
+        self.rollback_pose = self.pose.get_pose_local()
 
     def rollback(self):
-        self.pose.position = self.rollback_position
-        self.pose.orientation = self.rollback_orientation
+        self.pose.relocate(self.rollback_pose)
     
     def get_mask(self):
-        """mask is used to detect collisions
-        
-        OUTPUT
-            - mask (np.uint8)
-        """
+        """mask is used to detect collisions"""
         # create mask with shape of global map
         mask = np.zeros(self.env.FO_map.shape, dtype=np.uint8)
-        # get the MovableObkect's pose in the mask array coordinates
-        row, col, orientation = self.pose.get_image_pose(self.env.RESOLUTION,mask.shape[0])
+        # get the MovableObject's pose in the mask array coordinates
+        x,y,a = self.pose.get_pose_global()
+        row,col = realco_to_arrayco([x,y],self.env.RESOLUTION,mask.shape[0])
         # resize the image according to resolution and real shape
         image=cv2.resize(self.image.copy(), (int(self.imageshape[0]*self.env.RESOLUTION),int(self.imageshape[1]*self.env.RESOLUTION)), interpolation=cv2.INTER_NEAREST)
         # rotate the image to show object orientation
-        rotatedimage = ndimage.rotate(image, orientation, reshape=True)
+        rotatedimage = ndimage.rotate(image, a, reshape=True)
         # compute the slicing indices
         LenRow, LenCol = rotatedimage.shape
         start_row = row - LenRow // 2
@@ -114,9 +101,7 @@ class NAMOENV2D:
                                     else -> this step's picked MO in the self.MO_list of movable obstacles.
     """
 
-
-    def __init__(self,map_name="200x200_empty",config_name="config1", 
-                 linear_velocity = 0.1, angular_velocity = 9, resolution=40, seed=10):
+    def __init__(self,map_name="200x200_empty",config_name="config1", resolution=40, seed=10):
         """
         INPUT:
             - map_name (str)
@@ -140,8 +125,6 @@ class NAMOENV2D:
         self.goal = Pose(self.config_dict['goal_pose'],self.ORIGIN,"goal",color=(0,0,255))
         self.start = Pose(self.config_dict['ROB_init_dict']['pose'],self.ORIGIN,"start",color=(0,0,255))
         self.ROB = MovableObject(self,self.config_dict['ROB_init_dict'],'ROB')
-        self.linear_velocity = linear_velocity  #in meter/step
-        self.angular_velocity = angular_velocity #in degree/step
         self.MO_list=[]
         i=0
         for MO_init_dict in self.config_dict['MO_init_dicts_list']:
@@ -152,16 +135,11 @@ class NAMOENV2D:
         self.set_resolution(resolution)
         self._check_collision()
         self.process_ping=time.time()-t
-        if __name__ == "__main__":
-            print(f"goal: {self.goal.get_local_pose()}, goal_image {self.goal.get_image_pose(self.RESOLUTION,self.FO_map.shape[0])}")
-            print(f"start: {self.start.get_local_pose()}, start_image {self.start.get_image_pose(self.RESOLUTION,self.FO_map.shape[0])}")
-
 
     def set_resolution(self, resolution):
         self.RESOLUTION=int(resolution)
         self.FO_map = cv2.resize(self.original_FO_map, (int(self.MAP_SHAPE[0]*self.RESOLUTION),int(self.MAP_SHAPE[1]*self.RESOLUTION)), interpolation=cv2.INTER_NEAREST)
         self.SC_map = cv2.resize(self.original_SC_map, (int(self.MAP_SHAPE[0]*self.RESOLUTION),int(self.MAP_SHAPE[1]*self.RESOLUTION)), interpolation=cv2.INTER_NEAREST)
-
 
     def _check_collision(self):
         """
@@ -170,10 +148,8 @@ class NAMOENV2D:
         """
         # build a map with 1 on fixed obstacles (FO) and every object (MO/ROB)
         self.collision_map = self.FO_map.copy()
-        
         for object in self.MO_list+[self.ROB]:
             self.collision_map+=object.get_mask()
-        
         # if objects overlap with each other or fixed obstacles, 1+1=2. 
         # if there is more pixels with 2 than a max_surface, we consider there is a collision.
         max_surface = 0
@@ -192,15 +168,14 @@ class NAMOENV2D:
             else:
                 return False
 
-
     def add_obstacle(self, type=None, pose=None):
         t=time.time()
         if type is None:
             type = random.choice(["MOa","MOb","MOc"])
         if pose is None:
             max_tries = 1000
-            for tries in range(max_tries):
-                orig_x,orig_y = self.ORIGIN.position
+            for _ in range(max_tries):
+                orig_x,orig_y = self.ORIGIN.x, self.ORIGIN.y
                 width, height = self.MAP_SHAPE
                 rand_x = random.uniform(-orig_x,width-orig_x)
                 rand_y = random.uniform(-orig_y,height-orig_y)
@@ -208,40 +183,40 @@ class NAMOENV2D:
                 new_MO = MovableObject(self,{'type': type, 'pose': [rand_x,rand_y,rand_orientation]}, f"{len(self.MO_list)}" )
                 self.MO_list.append(new_MO)
                 if not self._check_collision():
-                    break
+                    pickable=False
+                    for pick_pose in new_MO.pick_poses:
+                        test_pose = Pose([0,0,0],pick_pose)
+                        test_pose.move_dxdyda(-0.25,0,0)
+                        #express the test pose in the origin of the environment reference frame
+                        test_pose_2ndparent = test_pose.get_pose_nthparent(2)
+                        self.MO_list.append(MovableObject(self,{'type': 'ROB', 'pose': test_pose_2ndparent}, "ROB_test"))
+                        if not self._check_collision():
+                            pickable=True
+                        test_pose.delete()
+                        self.MO_list.pop()
+                    if pickable:
+                        break
                 self.MO_list.pop()
         else:
             self.MO_list.append(MovableObject(self,{'type': type, 'pose': pose}, f"{len(self.MO_list)}" ))
-            if self._check_collision():
-                    self.MO_list.pop()
-                    print("created obstacle is in collision")
         self.process_ping=time.time()-t
     
-
-    def step(self, linear_displacement=0, angular_displacement=0, interaction=False):
-        """ the environment takes a timestep 
-            the robot executes the inputed actions.
-
-        INPUT:
-            linear_displacement (-1,0,1)
-            angular_displacement (-1,0,1)
-            interaction (bool)
-        """
+    def step(self, dx, dy, da, interaction=False):
+        """the environment takes a timestep, the robot executes the inputed actions."""
         t=time.time()
         self.steps += 1
         self.ROB.save_pose()
-        self.ROB.pose.move(linear_displacement*self.linear_velocity,angular_displacement*self.angular_velocity)
+        self.ROB.pose.move_dxdyda(dx, dy, da)
         if self._check_collision():
             self.ROB.rollback()
-            self._check_collision()
         if interaction:
             if self.pickedMO is None:
                 done=False
                 for MO in self.MO_list:
                     for MOpick in MO.pick_poses:
                         for ROBpick in self.ROB.pick_poses:
-                            if compare_poses(ROBpick,MOpick,2*self.linear_velocity,4*self.angular_velocity):
-                                MO.pose.to_brother_frame(self.ROB.pose)
+                            if compare_poses(ROBpick,MOpick,0.2,45):
+                                MO.pose.to_brother(self.ROB.pose)
                                 self.pickedMO = MO
                                 done=True
                                 break
@@ -250,13 +225,13 @@ class NAMOENV2D:
                     if done:
                         break
             else:
-                self.pickedMO.pose.to_parent_frame()
+                self.pickedMO.pose.to_parentframe()
                 self.pickedMO = None
         self.process_ping=time.time()-t
 
-
     def render(self, pose_resolution_factor=4, draw_position=False, thickness=7,  arrow_length=0.2):
         t = time.time()
+        self._check_collision()
         image = np.where(self.collision_map.copy() == 1, 0, 255).astype(np.uint8)
         if pose_resolution_factor >= 1:
             image = cv2.resize(image, (int(image.shape[1]*pose_resolution_factor),int(image.shape[0]*pose_resolution_factor)), interpolation=cv2.INTER_NEAREST)
@@ -268,17 +243,15 @@ class NAMOENV2D:
         cv2.moveWindow("render", 0, 0)
         cv2.imshow("render", image)
         cv2.waitKey(1)
-        self.render_ping = time.time()-t
-    
+        self.render_ping = time.time()-t 
 
-    def info_display(self):
-        display_text = f"steps:{self.steps} \nROB_imgpose:{self.ROB.pose.get_image_pose(self.RESOLUTION,self.FO_map.shape[0])} \nROB_localpose:{self.ROB.pose.get_local_pose()}"
-        display_text += f"\nlinear_velocity= {self.linear_velocity} \nangular_velocity= {self.angular_velocity} \npickedMO: {self.pickedMO}"
-        display_text += f"\nRESOLUTION:{self.RESOLUTION}(pxl/m) \nprocess_ping:{self.process_ping:.4f} \nrender_ping:{self.render_ping:.4f} "
-        if __name__ == "__main__":
-            display_text += f"\n -> z,q,s,d : move \n -> e : interact \n -> r : reset \n -> t : add obstacle "
-            display_text += f"\n -> f, g : linear_velocity *2,/2 \n -> h, j : angular_velocity *2,/2 "
-            display_text += f"\n -> w, x : resolution *2,/2 \n -> c, v : pose_res_factor +1,-1 "
+    def info_display(self, string=""):
+        x,y,a=self.ROB.pose.get_pose_local()
+        display_text = f"steps:{self.steps} \nROB:[{x:.2f},{y:.2f},{a:.1f}]"
+        display_text += f"\npickedMO: {self.pickedMO}"
+        display_text += f"\nRESOLUTION:{self.RESOLUTION}(pxl/m)"
+        display_text += f"\nprocess_ping:{self.process_ping:.4f} \nrender_ping:{self.render_ping:.4f} "
+        display_text += string
         # Create an image with text
         text_image = np.zeros([650,300])
         font_scale = 0.5
@@ -300,129 +273,90 @@ class NAMOENV2D:
 
 if __name__ == "__main__":
     from pynput import keyboard
-    
-    env_list=["200x200_empty","200x200_map1","200x200_map2"]
+    # Initialize variables
+    map_list = ["200x200_empty", "200x200_map1", "200x200_map2"]
+    config_list = ["config1", "config2"]
     i = 0
-    env = NAMOENV2D(env_list[i%3],linear_velocity = 0.5, angular_velocity = 45)
+    j = 0
+    env = NAMOENV2D(map_list[i % 3], config_list[j % 2])
     pose_resolution_factor = 4
     env.render(pose_resolution_factor)
-    env.info_display()
+    info_string = "\n -> z,q,s,d : move \n -> a,e : rotate \n -> f : interact \n -> r : reset \n -> t : add obstacle \n -> w, x : resolution *2,/2 \n -> c, v : pose_res_factor +1,-1"
+    env.info_display(info_string)
     pressed_keys = set()
-
+    # Define key action mappings
+    key_actions = {
+        'z': lambda: update_motion(0, 0.1, 0),
+        's': lambda: update_motion(0, -0.1, 0),
+        'q': lambda: update_motion(-0.1, 0, 0),
+        'd': lambda: update_motion(0.1, 0, 0),
+        'a': lambda: update_motion(0, 0, 22.5),
+        'e': lambda: update_motion(0, 0, -22.5),
+        'r': lambda: reset_environment(),
+        't': lambda: env.add_obstacle(),
+        'f': lambda: update_interaction(),
+        'w': lambda: update_resolution(env.RESOLUTION * 2),
+        'x': lambda: update_resolution(env.RESOLUTION / 2),
+        'c': lambda: update_pose_resolution(1),
+        'v': lambda: update_pose_resolution(-1)
+    }
+    def update_motion(dx_change, dy_change, da_change):
+        global dx, dy, da
+        dx += dx_change
+        dy += dy_change
+        da += da_change
+    def reset_environment():
+        global i, j, env
+        i += 1
+        if i % 3 == 0:
+            j += 1
+        env = NAMOENV2D(map_list[i % 3], config_list[j % 2])
+        env.render()
+        pressed_keys.discard('r')
+    def update_interaction():
+        global interaction
+        interaction = True
+        pressed_keys.discard('f')
+    def update_resolution(new_resolution):
+        env.set_resolution(new_resolution)
+        pressed_keys.discard('w')
+        pressed_keys.discard('x')
+    def update_pose_resolution(factor_change):
+        global pose_resolution_factor
+        pose_resolution_factor += factor_change
+        pressed_keys.discard('c')
+        pressed_keys.discard('v')
+    # Keyboard event handlers
     def on_press(key):
         try:
-            if key.char == 'z':
-                pressed_keys.add('z')
-            elif key.char == 's':
-                pressed_keys.add('s')
-            elif key.char == 'q':
-                pressed_keys.add('q')
-            elif key.char == 'd':
-                pressed_keys.add('d')
-            elif key.char == 'e':
-                pressed_keys.add('e')
-            elif key.char == 'r':
-                pressed_keys.add('r')
-            elif key.char == 't':
-                pressed_keys.add('t')
-            elif key.char == 'f':
-                pressed_keys.add('f')
-            elif key.char == 'g':
-                pressed_keys.add('g')            
-            elif key.char == 'h':
-                pressed_keys.add('h')            
-            elif key.char == 'j':
-                pressed_keys.add('j')
-            elif key.char == 'w':
-                pressed_keys.add('w')
-            elif key.char == 'x':
-                pressed_keys.add('x')
-            elif key.char == 'c':
-                pressed_keys.add('c')
-            elif key.char == 'v':
-                pressed_keys.add('v')       
+            if key.char in key_actions:
+                pressed_keys.add(key.char)
         except AttributeError:
             if key == keyboard.Key.esc:
                 pressed_keys.add('esc')
-
     def on_release(key):
         try:
-            if key.char == 'z':
-                pressed_keys.discard('z')
-            elif key.char == 's':
-                pressed_keys.discard('s')
-            elif key.char == 'q':
-                pressed_keys.discard('q')
-            elif key.char == 'd':
-                pressed_keys.discard('d')
+            if key.char in pressed_keys:
+                pressed_keys.discard(key.char)
         except AttributeError:
             if key == keyboard.Key.esc:
                 pressed_keys.discard('esc')
-
+    # Start the keyboard listener
     listener = keyboard.Listener(on_press=on_press, on_release=on_release)
     listener.start()
-
+    # Main loop
     while True:
         time.sleep(0.1)
-        linear_displacement=0
-        angular_displacement=0
+        dx = dy = da = 0
         interaction = False
-        # Wait for a key press
-        while not pressed_keys:
-            cv2.waitKey(10)
+        if not pressed_keys:
+            cv2.waitKey(0)
         if 'esc' in pressed_keys:
             break
-        if 'z' in pressed_keys:
-            linear_displacement = 1
-        if 's' in pressed_keys:
-            linear_displacement = -1
-        if 'q' in pressed_keys:
-            angular_displacement = 1
-        if 'd' in pressed_keys:
-            angular_displacement = -1
-        if 'e' in pressed_keys:
-            interaction = True
-            pressed_keys.discard('e')
-        if 'r' in pressed_keys:
-            i += 1
-            env = NAMOENV2D(env_list[i % 3])
-            env.render()
-            pressed_keys.discard('r')
-        if 't' in pressed_keys:
-            env.add_obstacle()
-            pressed_keys.discard('t')
-        if 'f' in pressed_keys:
-            env.linear_velocity *= 2
-            pressed_keys.discard('f')
-        if 'g' in pressed_keys:
-            env.linear_velocity /= 2
-            pressed_keys.discard('g')
-        if 'h' in pressed_keys:
-            env.angular_velocity *= 2
-            pressed_keys.discard('h')
-        if 'j' in pressed_keys:
-            env.angular_velocity /= 2
-            pressed_keys.discard('j')
-        if 'w' in pressed_keys:
-            env.set_resolution(env.RESOLUTION*2)
-            pressed_keys.discard('w')
-        if 'x' in pressed_keys:
-            env.set_resolution(env.RESOLUTION/2)
-            pressed_keys.discard('x')
-        if 'c' in pressed_keys:
-            pose_resolution_factor += 1
-            pressed_keys.discard('c')
-        if 'v' in pressed_keys:
-            pose_resolution_factor -= 1
-            pressed_keys.discard('v')
-        env.step(linear_displacement,angular_displacement, interaction)
+        for key in pressed_keys.copy():
+            if key in key_actions:
+                key_actions[key]()
+        env.step(dx, dy, da, interaction)
         env.render(pose_resolution_factor)
-        env.info_display()
+        env.info_display(info_string)
     cv2.destroyAllWindows()
-
-
-
-
-
-
-
